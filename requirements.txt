@@ -1,0 +1,3 @@
+pythonnet
+matplotlib
+python-dotenv

@@ -1,0 +1,16 @@
+CLAUDE.md
+
+# Secrets - real credentials live only in .env (see .env.example for the template)
+.env
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime/debug logs
+*.log
+QuoteComExamplePy/Logs/
+
+# Word lock files
+~$*
