@@ -31,7 +31,7 @@ def update_candle(price, time_str):
 
 # ── QuoteCom setup ────────────────────────────────────────────────
 import clr
-assembly_path = r"C:\Users\user\Desktop\websocket\Taiwan-Websocket-Data\QuoteComExamplePy"
+assembly_path = r"C:\Users\user\OneDrive\Desktop\websocket\Taiwan-Websocket-Data\QuoteComExamplePy"
 sys.path.append(assembly_path)
 clr.AddReference("Package")
 clr.AddReference("PushClient")

@@ -1,6 +1,6 @@
 import time
 import sys
-sys.path.append(r"C:\Users\user\Desktop\websocket\Taiwan-Websocket-Data\TradeComExamplePy")  # adjust to where tradecomPy.py is
+sys.path.append(r"C:\Users\user\OneDrive\Desktop\websocket\Taiwan-Websocket-Data\TradeComExamplePy")  # adjust to where tradecomPy.py is
 import tradecomPy
 import threading
 from System import UInt16
