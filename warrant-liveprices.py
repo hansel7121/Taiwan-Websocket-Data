@@ -579,7 +579,10 @@ def onQuoteRcvMessage(sender, pkg):
                 "price": price, "qty": qty, "time": t_fmt,
             })
             if STRATEGY == "HYBRID":
-                hybrid_manager.on_match_tick(code, int(pkg.Total_Qty))
+                # pkg.Total_Qty is a .NET Decimal; Python's int() can't convert
+                # it directly (raises TypeError) — route through str()/float()
+                # first, same as every other pkg field in this file already does.
+                hybrid_manager.on_match_tick(code, int(float(str(pkg.Total_Qty))))
 
         elif name == "QUOTE_LAST_PRICE_STOCK":
             # Response to RetriveLastPriceStock — fires when STRATEGY ==
