@@ -67,12 +67,63 @@ COVERAGE_SNAPSHOT_INTERVAL_MS = 60_000  # log a coverage snapshot every 60s
 #   The default here instead targets a ~35-45s full sweep (~25-30 req/s) and
 #   logs real per-call round-trip latency, so tomorrow's numbers can justify
 #   speeding this up rather than guessing 5s cold.
-STRATEGY = "FULL_BATCH"   # one of: "FULL_BATCH", "ROTATION", "POLLING"
+#
+# "HYBRID" (active): stop treating every code equally. Use the scarce
+#   Qnum push slots on whichever codes are CURRENTLY trading fastest (true
+#   real-time where it matters), and background-poll everything else via
+#   RetriveLastPriceStock (best-effort freshness, no fixed target — just
+#   faster than a website refresh). HybridManager below.
+#   Ranking signal: both push MATCH packages (Total_Qty) and poll
+#   LAST_PRICE_STOCK responses (TotalMatchQty) carry a cumulative day-volume
+#   field KGI's own quotecomPy.py sample labels "總量" on both — verified by
+#   inspection to be the same quantity, not verified side-by-side live. A
+#   raw delta between two observations of that counter, divided by the time
+#   between them, gives a volume/sec rate that's comparable regardless of
+#   whether the two observations came from push or poll — this is what
+#   makes ranking possible despite push and poll arriving at wildly
+#   different frequencies. Smoothed with an EWMA (HYBRID_RATE_EWMA_ALPHA) so
+#   one anomalous delta can't cause a one-shot promotion.
+#   Every HYBRID_RERANK_INTERVAL_S, the top `slots` codes by that rate get
+#   push-subscribed; a currently-subscribed code is only demoted once its
+#   rank falls below `slots + HYBRID_DEMOTE_MARGIN` (hysteresis), not the
+#   instant it drops below `slots` — otherwise a code sitting right at the
+#   boundary would swap in and out every single tick. Unverified: whether
+#   this margin is the right size, and whether the server tolerates this
+#   swap rate any better/worse than ROTATION's own churn.
+#   Cold start: no code has any rate data at t=0, so promotion is skipped
+#   entirely (pure polling) until at least one code has two observations.
+#   A rate needs a first AND second sighting of the same code, so the
+#   earliest that can happen is one full poll sweep in — given the ~39s
+#   sweep time measured under POLLING, that's up to ~78s worst-case for a
+#   code polled late in the first sweep. Derived from measured data, not a
+#   fresh guess.
+STRATEGY = "HYBRID"   # one of: "FULL_BATCH", "ROTATION", "POLLING", "HYBRID"
 
 ROTATION_SLOTS_DEFAULT = 25       # overridden at runtime by the observed Qnum, if received
 ROTATION_TIMEOUT_S = 30           # force-advance a code that never ticks within this long
 
 POLL_DELAY_BETWEEN_CALLS_S = 0.035   # ~35ms -> ~29 req/s -> ~39s per full 1116-code sweep
+
+HYBRID_RERANK_INTERVAL_S = 5      # how often to re-rank and possibly swap push slots.
+                                   # Assumed, not measured: balances slot freshness against
+                                   # avoiding Sub/UnSub churn (server-side churn cooldown is
+                                   # unverified, per the ROTATION notes above). Tune after
+                                   # observing real swap frequency in the debug log.
+HYBRID_DEMOTE_MARGIN = 5          # an active code is only demoted once its rank falls below
+                                   # (slots + this), not just below slots. Assumed (20% of a
+                                   # 25-slot budget): stops boundary codes from swapping in
+                                   # and out every rerank tick. Pure guess until real
+                                   # activity-rate data exists to tune it against.
+HYBRID_RATE_EWMA_ALPHA = 0.3      # smoothing factor for the volume/sec activity score.
+                                   # Assumed: reacts to a code going hot within ~2-3
+                                   # observations without one anomalous delta causing a
+                                   # one-shot promotion. Not measured against real intraday
+                                   # volume-burst shapes.
+HYBRID_POLL_DELAY_BETWEEN_CALLS_S = 0.035   # same reasoning as POLL_DELAY_BETWEEN_CALLS_S;
+                                   # kept separate since HYBRID's poll list is ~`slots`
+                                   # codes shorter each cycle (active codes excluded), so
+                                   # this may be safely tunable independent of pure POLLING
+                                   # mode once real numbers exist.
 
 # Numeric DT -> symbolic name, for readable debug logs (DT enum members are the
 # all-caps class attributes; everything else on the class is inherited Enum/
@@ -135,6 +186,32 @@ def coverage_summary():
         depth_covered = sum(1 for v in coverage.values() if v["got_depth"])
         match_covered = sum(1 for v in coverage.values() if v["got_match"])
     return total, covered, depth_covered, match_covered
+
+
+# ── HYBRID activity tracking: code -> cumulative-volume rate (contracts/sec),
+# fed by both push MATCH ticks (Total_Qty) and poll LAST_PRICE_STOCK responses
+# (TotalMatchQty). Kept unconditional on STRATEGY (cheap dict update, same
+# cost class as mark_coverage above) so the data structure is harmless dead
+# weight in other modes rather than needing its own strategy guard at every
+# call site.
+activity_lock = threading.Lock()
+activity = {}  # code -> {"last_cum_qty": int|None, "last_obs_t": float|None, "rate_ewma": float}
+
+
+def update_activity(code, cum_qty, now=None):
+    if now is None:
+        now = time.time()
+    with activity_lock:
+        entry = activity.setdefault(code, {"last_cum_qty": None, "last_obs_t": None, "rate_ewma": 0.0})
+        last_qty = entry["last_cum_qty"]
+        last_t = entry["last_obs_t"]
+        if last_qty is not None and last_t is not None and now > last_t and cum_qty >= last_qty:
+            raw_rate = (cum_qty - last_qty) / (now - last_t)
+            entry["rate_ewma"] = HYBRID_RATE_EWMA_ALPHA * raw_rate + (1 - HYBRID_RATE_EWMA_ALPHA) * entry["rate_ewma"]
+        # cum_qty < last_qty (counter reset/edge case): skip the rate update,
+        # just refresh the observation below so the next delta is still valid.
+        entry["last_cum_qty"] = cum_qty
+        entry["last_obs_t"] = now
 
 
 # ── BACKUP PLAN #1 (inactive unless STRATEGY = "ROTATION"): asymmetric
@@ -318,6 +395,139 @@ class PollingManager:
 polling_manager = PollingManager(POLL_DELAY_BETWEEN_CALLS_S) if STRATEGY == "POLLING" else None
 
 
+# ── HYBRID strategy (active): push-subscribe only the `slots` codes with the
+# highest current activity rate (see update_activity above); poll everything
+# else via RetriveLastPriceStock. Two dedicated daemon threads, same
+# single-writer discipline as RotationManager/PollingManager: only the rerank
+# loop ever calls Sub/UnSubQuotes*, and only the poll loop ever calls
+# RetriveLastPriceStock — callbacks (onQuoteRcvMessage) only ever feed
+# update_activity() and never call back into the QuoteCom API themselves.
+class HybridManager:
+    def __init__(self, slots, rerank_interval_s, poll_delay_s):
+        self.slots = slots
+        self.rerank_interval_s = rerank_interval_s
+        self.poll_delay_s = poll_delay_s
+        self.lock = threading.Lock()
+        self.active = {}   # code -> subscribed_at (epoch)
+        self.all_codes = []
+        self._stop = threading.Event()
+
+    def start(self, codes):
+        self.all_codes = list(codes)
+        self._code_order = {c: i for i, c in enumerate(self.all_codes)}
+        with self.lock:
+            self.active = {}
+        threading.Thread(target=self._poll_loop, daemon=True).start()
+        threading.Thread(target=self._rerank_loop, daemon=True).start()
+        log_debug(f"[HYBRID] started: {len(self.all_codes)} codes, "
+                  f"{self.slots} push slots, rerank every {self.rerank_interval_s}s")
+
+    def _poll_loop(self):
+        cycle_count = 0
+        while not self._stop.is_set():
+            cycle_start = time.time()
+            with self.lock:
+                active_now = set(self.active)
+            codes_to_poll = [c for c in self.all_codes if c not in active_now]
+            for code in codes_to_poll:
+                if self._stop.is_set():
+                    return
+                try:
+                    quoteCom.RetriveLastPriceStock(code)
+                except Exception:
+                    log_debug(f"[HYBRID] RetriveLastPriceStock({code}) failed:\n"
+                              + traceback.format_exc())
+                time.sleep(self.poll_delay_s)
+            cycle_count += 1
+            elapsed = time.time() - cycle_start
+            log_debug(f"[HYBRID] poll sweep #{cycle_count} complete: "
+                      f"{len(codes_to_poll)} codes (excludes {len(active_now)} active) "
+                      f"in {elapsed:.1f}s")
+
+    def _rerank_loop(self):
+        while not self._stop.wait(self.rerank_interval_s):
+            with activity_lock:
+                rates = {code: activity[code]["rate_ewma"] for code in activity}
+            ranked = sorted(
+                self.all_codes,
+                key=lambda c: (-rates.get(c, 0.0), self._code_order[c]),
+            )
+            if not any(rates.get(c, 0.0) > 0 for c in self.all_codes):
+                continue  # cold start: no activity data yet, stay in pure-polling mode
+
+            with self.lock:
+                active_now = dict(self.active)
+
+            top_n = ranked[:self.slots]
+            demote_eligible = set(ranked[:self.slots + HYBRID_DEMOTE_MARGIN])
+            to_promote = [c for c in top_n if c not in active_now]  # best-ranked first
+            demotable = [c for c in active_now if c not in demote_eligible]
+            # rank-order demotable codes worst-first so the least active gets swapped first
+            demotable.sort(key=lambda c: rates.get(c, 0.0))
+
+            swaps = []
+            for new_code in to_promote:
+                if len(active_now) < self.slots:
+                    active_now[new_code] = time.time()
+                    swaps.append((new_code, None))
+                elif demotable:
+                    old_code = demotable.pop(0)
+                    del active_now[old_code]
+                    active_now[new_code] = time.time()
+                    swaps.append((new_code, old_code))
+                else:
+                    break  # no room and nothing eligible to demote this tick
+
+            if not swaps:
+                continue
+
+            with self.lock:
+                self.active = active_now
+
+            for new_code, old_code in swaps:
+                self._subscribe_one(new_code)
+                if old_code is not None:
+                    self._unsubscribe_one(old_code)
+                    msg = (f"promoted {new_code} (rate={rates.get(new_code, 0.0):.2f}/s) "
+                           f"-> demoted {old_code} (rate={rates.get(old_code, 0.0):.2f}/s)")
+                else:
+                    msg = f"promoted {new_code} (rate={rates.get(new_code, 0.0):.2f}/s) into empty slot"
+                log_debug(f"[HYBRID] {msg}")
+                gui_queue.put({"type": "hybrid", "text": msg})
+
+    def on_match_tick(self, code, total_qty):
+        update_activity(code, total_qty)
+
+    def on_poll_response(self, code, total_match_qty):
+        update_activity(code, total_match_qty)
+
+    def _subscribe_one(self, code):
+        try:
+            s1 = quoteCom.SubQuotesMatch(code)
+            s2 = quoteCom.SubQuotesDepth(code)
+            log_debug(f"[HYBRID] subscribed {code} (match={s1}, depth={s2})")
+        except Exception:
+            log_debug(f"[HYBRID] subscribe failed for {code}:\n" + traceback.format_exc())
+
+    def _unsubscribe_one(self, code):
+        try:
+            quoteCom.UnSubQuotesMatch(code)
+            quoteCom.UnSubQuotesDepth(code)
+        except Exception:
+            log_debug(f"[HYBRID] unsubscribe failed for {code}:\n" + traceback.format_exc())
+
+    def stop(self):
+        self._stop.set()
+        with self.lock:
+            still_active = list(self.active.keys())
+        for code in still_active:
+            self._unsubscribe_one(code)
+
+
+hybrid_manager = HybridManager(ROTATION_SLOTS_DEFAULT, HYBRID_RERANK_INTERVAL_S,
+                                HYBRID_POLL_DELAY_BETWEEN_CALLS_S) if STRATEGY == "HYBRID" else None
+
+
 # ── QuoteCom callbacks ───────────────────────────────────────────────────────
 # Every callback body is wrapped in try/except: an unhandled Python exception
 # raised inside a .NET-invoked callback previously corrupted the pythonnet/GIL
@@ -354,6 +564,8 @@ def onQuoteRcvMessage(sender, pkg):
             })
             if STRATEGY == "ROTATION":
                 rotation_manager.on_tick(code)
+            # DEPTH packets carry no volume field (bid/ask quantity only), so
+            # HYBRID has nothing to extract here — no hook, deliberately.
 
         elif name in ("QUOTE_STOCK_MATCH1", "QUOTE_STOCK_MATCH2"):
             code = str(pkg.StockNo).strip()
@@ -366,10 +578,12 @@ def onQuoteRcvMessage(sender, pkg):
                 "type": "match", "code": code,
                 "price": price, "qty": qty, "time": t_fmt,
             })
+            if STRATEGY == "HYBRID":
+                hybrid_manager.on_match_tick(code, int(pkg.Total_Qty))
 
         elif name == "QUOTE_LAST_PRICE_STOCK":
-            # Response to RetriveLastPriceStock — only fires when STRATEGY ==
-            # "POLLING" actually issues those queries. Same PI30026 shape we
+            # Response to RetriveLastPriceStock — fires when STRATEGY ==
+            # "POLLING" or "HYBRID" issues those queries. Same PI30026 shape we
             # verified earlier today (LastMatchPrice + BUY_DEPTH/SELL_DEPTH),
             # just arriving as a query response instead of a push.
             code = str(pkg.StockNo).strip()
@@ -384,6 +598,8 @@ def onQuoteRcvMessage(sender, pkg):
                 if latency is not None:
                     log_debug(f"[POLLING] {code} round-trip={latency*1000:.0f}ms "
                               f"last={pkg.LastMatchPrice} bid={bid} ask={ask}")
+            elif STRATEGY == "HYBRID":
+                hybrid_manager.on_poll_response(code, int(pkg.TotalMatchQty))
 
         elif name == "LOGIN":
             # Matches KGI's own quotecomPy.py example: the login-response
@@ -396,6 +612,12 @@ def onQuoteRcvMessage(sender, pkg):
                 try:
                     rotation_manager.slots = int(qnum)
                     log_debug(f"[ROTATION] slot count set from observed Qnum: {qnum}")
+                except (TypeError, ValueError):
+                    pass
+            elif STRATEGY == "HYBRID" and qnum:
+                try:
+                    hybrid_manager.slots = int(qnum)
+                    log_debug(f"[HYBRID] slot count set from observed Qnum: {qnum}")
                 except (TypeError, ValueError):
                     pass
 
@@ -495,6 +717,19 @@ def setup_and_subscribe():
             "text": f"Polling backup active: round-robin over {len(all_codes)} codes",
         })
         log_debug("SETUP: done (polling mode). Now waiting for live messages...")
+        return
+
+    if STRATEGY == "HYBRID":
+        log_debug(f"Using HYBRID strategy: {hybrid_manager.slots} push slots on the "
+                  f"hottest codes, polling the remaining "
+                  f"{len(all_codes) - hybrid_manager.slots} codes")
+        hybrid_manager.start(all_codes)
+        gui_queue.put({
+            "type": "status",
+            "text": f"Hybrid active: {hybrid_manager.slots} push slots on hottest "
+                    f"codes, polling the rest of {len(all_codes)} total",
+        })
+        log_debug("SETUP: done (hybrid mode). Now waiting for live messages...")
         return
 
     joined = "|".join(all_codes)
@@ -625,6 +860,9 @@ def drain_queue():
             elif etype == "rotation":
                 append_log_line(f"[ROTATION] {event['text']}")
 
+            elif etype == "hybrid":
+                append_log_line(f"[HYBRID] {event['text']}")
+
     except queue.Empty:
         pass
 
@@ -661,6 +899,11 @@ def on_close():
             polling_manager.stop()
         except Exception:
             log_debug("Polling manager stop failed:\n" + traceback.format_exc())
+    if STRATEGY == "HYBRID":
+        try:
+            hybrid_manager.stop()
+        except Exception:
+            log_debug("Hybrid manager stop failed:\n" + traceback.format_exc())
     try:
         if quoteCom is not None and all_codes and STRATEGY == "FULL_BATCH":
             joined = "|".join(all_codes)
