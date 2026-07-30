@@ -2,6 +2,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 import os
+import re
 import time
 import queue
 import threading
@@ -462,10 +463,16 @@ def setup_and_subscribe():
 
     try:
         results = list(quoteCom.GetWarrantTargetStock(UNDERLYING_STOCK))
-        all_codes = [str(w.WarrantID).strip() for w in results]
+        raw_codes = [str(w.WarrantID).strip() for w in results]
     except Exception:
         log_debug("GetWarrantTargetStock failed:\n" + traceback.format_exc())
-        all_codes = []
+        raw_codes = []
+
+    all_codes = [c for c in raw_codes if re.fullmatch(r"\d{6}", c)]
+    invalid_codes = [c for c in raw_codes if c not in all_codes]
+    if invalid_codes:
+        log_debug(f"Discarded {len(invalid_codes)} non-6-digit warrant codes, "
+                  f"e.g. {invalid_codes[:10]}")
 
     log_debug(f"Resolved {len(all_codes)} warrant codes for underlying {UNDERLYING_STOCK}")
     gui_queue.put({"type": "populate", "codes": list(all_codes)})
