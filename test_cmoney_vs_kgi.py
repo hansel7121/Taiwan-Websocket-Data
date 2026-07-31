@@ -2,9 +2,12 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 import csv
+import http.cookiejar
 import json
+import re
 import threading
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
@@ -32,8 +35,7 @@ from kgi_config import TOKEN, SID, USER_ID, PASSWORD
 # price value — whichever timestamp is earlier detected that price change
 # first. No shared trade-time field is required for this comparison.
 
-TEST_CODE = "051709"   # was actively trading in today's HYBRID test run (rate~2.47/s)
-CMONEY_CMKEY = "F9jTLFaCTDAiiKvSHh38hw=="   # fixed per-page key, same for any warrant code
+TEST_CODE = "066041"   # actively trading in today's HYBRID test run (rate~0.74/s, highest observed)
 KGI_POLL_INTERVAL_S = 50
 CMONEY_POLL_INTERVAL_S = 5
 
@@ -49,18 +51,47 @@ def log_row(source, price, extra=""):
     print(f"{now} [{source}] price={price} {extra}", flush=True)
 
 
+# cmkey rotates (confirmed: yesterday's hardcoded value returned {"Error":-3,
+# "Message":"金鑰不正確"} today) — fetch a fresh one from the page itself at
+# startup instead of hardcoding it, using a cookiejar-backed opener since the
+# key may be tied to the session cookie set on that same page load.
+_cookie_jar = http.cookiejar.CookieJar()
+_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookie_jar))
+_HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+
+def fetch_cmkey(code):
+    page_url = f"https://www.cmoney.tw/finance/warrantsquery.aspx?warrant={code}"
+    req = urllib.request.Request(page_url, headers=_HEADERS)
+    with _opener.open(req, timeout=10) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+    m = re.search(r"class='primary-navi-now'>.*?cmkey='([^']+)'", html, re.DOTALL)
+    if not m:
+        raise RuntimeError("could not find cmkey on warrantsquery.aspx page")
+    return m.group(1)
+
+
 def cmoney_loop(stop_event):
+    try:
+        cmkey = fetch_cmkey(TEST_CODE)
+    except Exception as e:
+        log_row("CMONEY", "ERROR", f"fetch_cmkey failed: {e}")
+        return
+    # cmkey is base64-like (contains +, /, =) and MUST be percent-encoded —
+    # an unescaped '+' in a URL query string is interpreted as a literal
+    # space by the server, which silently corrupts the key ("金鑰不正確").
     url = (f"https://www.cmoney.tw/finance/ashx/mainpage.ashx"
-           f"?action=GetWarrantData&cmkey={CMONEY_CMKEY}&commKey={TEST_CODE}")
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": f"https://www.cmoney.tw/finance/warrantsquery.aspx?warrant={TEST_CODE}",
-    }
+           f"?action=GetWarrantData&cmkey={urllib.parse.quote(cmkey, safe='')}&commKey={TEST_CODE}")
+    headers = dict(_HEADERS, Referer=f"https://www.cmoney.tw/finance/warrantsquery.aspx?warrant={TEST_CODE}")
     while not stop_event.is_set():
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with _opener.open(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
+            if data.get("Error"):
+                log_row("CMONEY", "ERROR", data.get("Message"))
+                stop_event.wait(CMONEY_POLL_INTERVAL_S)
+                continue
             w = data["Warrant"]
             log_row("CMONEY", w["SalePr"], f"trade_time={w['SaleTe']}")
         except Exception as e:
@@ -128,7 +159,7 @@ if __name__ == "__main__":
         csv.writer(f).writerow(["timestamp", "source", "price", "extra"])
 
     print(f"Testing code {TEST_CODE}: CMONEY every {CMONEY_POLL_INTERVAL_S}s, "
-          f"KGI_POLL every {KGI_POLL_INTERVAL_S}s. Ctrl+C to stop.")
+          f"KGI_POLL every {KGI_POLL_INTERVAL_S}s. Ctrl+C to stop.", flush=True)
 
     stop_event = threading.Event()
     threading.Thread(target=cmoney_loop, args=(stop_event,), daemon=True).start()
