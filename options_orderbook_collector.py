@@ -58,15 +58,17 @@ UNDERLYING_COMID = "CDO"   # TSMC (2330) stock options on TAIFEX
 TOP_N = 25
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 TODAY = datetime.now().strftime("%Y%m%d")
 
-STATE_PATH = os.path.join(SCRIPT_DIR, f"options_state_{TODAY}.json")
-HEARTBEAT_PATH = os.path.join(SCRIPT_DIR, "options_heartbeat.txt")
-DONE_MARKER_PATH = os.path.join(SCRIPT_DIR, f"options_done_{TODAY}.marker")
-DEBUG_LOG_PATH = os.path.join(SCRIPT_DIR, "options_orderbook_debug.log")
+STATE_PATH = os.path.join(DATA_DIR, f"options_state_{TODAY}.json")
+HEARTBEAT_PATH = os.path.join(DATA_DIR, "options_heartbeat.txt")
+DONE_MARKER_PATH = os.path.join(DATA_DIR, f"options_done_{TODAY}.marker")
+DEBUG_LOG_PATH = os.path.join(DATA_DIR, "options_orderbook_debug.log")
 
-DEPTH_CSV_PATH = os.path.join(SCRIPT_DIR, f"options_depth_{TODAY}.csv")
-TRADES_CSV_PATH = os.path.join(SCRIPT_DIR, f"options_trades_{TODAY}.csv")
+DEPTH_CSV_PATH = os.path.join(DATA_DIR, f"options_depth_{TODAY}.csv")
+TRADES_CSV_PATH = os.path.join(DATA_DIR, f"options_trades_{TODAY}.csv")
 
 MARKET_OPEN_TIME = dtime(8, 45)
 MARKET_CLOSE_TIME = dtime(13, 45)

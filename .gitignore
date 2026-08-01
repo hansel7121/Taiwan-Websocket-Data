@@ -12,5 +12,11 @@ __pycache__/
 *.log
 QuoteComExamplePy/Logs/
 
+# Ephemeral collector liveness signals (heartbeat/done-marker) — pure
+# operational noise for the supervisor, not data. The depth/trades CSVs and
+# state JSON in data/ are the real record and stay tracked.
+data/*_heartbeat.txt
+data/*.marker
+
 # Word lock files
 ~$*

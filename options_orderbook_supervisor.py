@@ -20,11 +20,15 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 COLLECTOR_SCRIPT = os.path.join(SCRIPT_DIR, "options_orderbook_collector.py")
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 TODAY = datetime.now().strftime("%Y%m%d")
 
-HEARTBEAT_PATH = os.path.join(SCRIPT_DIR, "options_heartbeat.txt")
-DONE_MARKER_PATH = os.path.join(SCRIPT_DIR, f"options_done_{TODAY}.marker")
-SUPERVISOR_LOG_PATH = os.path.join(SCRIPT_DIR, f"options_supervisor_{TODAY}.log")
+# Must match the collector's own DATA_DIR paths exactly — this is how the
+# supervisor observes the collector's heartbeat/done-marker from outside.
+HEARTBEAT_PATH = os.path.join(DATA_DIR, "options_heartbeat.txt")
+DONE_MARKER_PATH = os.path.join(DATA_DIR, f"options_done_{TODAY}.marker")
+SUPERVISOR_LOG_PATH = os.path.join(DATA_DIR, f"options_supervisor_{TODAY}.log")
 
 HEARTBEAT_STALE_AFTER_S = 60     # collector heartbeats every 15s; 4x margin
 POLL_INTERVAL_S = 5              # how often the supervisor checks in
@@ -180,7 +184,7 @@ def main():
             log(f"Hit MAX_RESTARTS_PER_DAY ({MAX_RESTARTS_PER_DAY}) without the "
                 f"collector ever completing cleanly — giving up. Something is "
                 f"persistently broken (check {SUPERVISOR_LOG_PATH} and "
-                f"options_orderbook_debug.log) and needs a human, not another "
+                f"data/options_orderbook_debug.log) and needs a human, not another "
                 f"automatic restart.")
             return
 

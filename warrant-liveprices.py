@@ -25,7 +25,9 @@ from kgi_config import TOKEN, SID, USER_ID, PASSWORD
 UNDERLYING_STOCK = "2330"   # TSMC
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEBUG_LOG_PATH = os.path.join(SCRIPT_DIR, "warrant_liveprices_debug.log")
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DEBUG_LOG_PATH = os.path.join(DATA_DIR, "warrant_liveprices_debug.log")
 MAX_LOG_LINES_IN_GUI = 500
 COVERAGE_SNAPSHOT_INTERVAL_MS = 60_000  # log a coverage snapshot every 60s
 

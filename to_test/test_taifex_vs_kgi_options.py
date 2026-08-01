@@ -17,6 +17,8 @@ clr.AddReference("PushClient")
 clr.AddReference("QuoteCom")
 from Intelligence import QuoteCom, COM_STATUS, DT
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root, for kgi_config
 from kgi_config import TOKEN, SID, USER_ID, PASSWORD
 
 # ── What this measures ───────────────────────────────────────────────────────
@@ -57,7 +59,9 @@ TAIFEX_POLL_INTERVAL_S = 3   # how often to hit TAIFEX's public REST endpoint.
                               # seeing Monday's real response times/any errors.
 TEST_DURATION_S = None   # None = run until Ctrl+C; set a number to auto-stop
 
-LOG_PATH = "taifex_vs_kgi_options_test.csv"
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+LOG_PATH = os.path.join(DATA_DIR, "taifex_vs_kgi_options_test.csv")
 log_lock = threading.Lock()
 
 TAIFEX_BASE = "https://mis.taifex.com.tw/futures/api"

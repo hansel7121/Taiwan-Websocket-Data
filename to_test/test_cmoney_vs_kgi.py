@@ -19,6 +19,8 @@ clr.AddReference("PushClient")
 clr.AddReference("QuoteCom")
 from Intelligence import QuoteCom, COM_STATUS, DT
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root, for kgi_config
 from kgi_config import TOKEN, SID, USER_ID, PASSWORD
 
 # ── What this measures ───────────────────────────────────────────────────────
@@ -39,7 +41,9 @@ TEST_CODE = "066041"   # actively trading in today's HYBRID test run (rate~0.74/
 KGI_POLL_INTERVAL_S = 50
 CMONEY_POLL_INTERVAL_S = 5
 
-LOG_PATH = "cmoney_vs_kgi_test.csv"
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+LOG_PATH = os.path.join(DATA_DIR, "cmoney_vs_kgi_test.csv")
 log_lock = threading.Lock()
 
 

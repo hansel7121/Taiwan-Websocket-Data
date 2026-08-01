@@ -72,15 +72,17 @@ UNDERLYING_STOCK = "2330"   # TSMC
 TOP_N = 25
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 TODAY = datetime.now().strftime("%Y%m%d")
 
-STATE_PATH = os.path.join(SCRIPT_DIR, f"orderbook_state_{TODAY}.json")
-HEARTBEAT_PATH = os.path.join(SCRIPT_DIR, "orderbook_heartbeat.txt")
-DONE_MARKER_PATH = os.path.join(SCRIPT_DIR, f"orderbook_done_{TODAY}.marker")
-DEBUG_LOG_PATH = os.path.join(SCRIPT_DIR, "warrant_orderbook_debug.log")
+STATE_PATH = os.path.join(DATA_DIR, f"orderbook_state_{TODAY}.json")
+HEARTBEAT_PATH = os.path.join(DATA_DIR, "orderbook_heartbeat.txt")
+DONE_MARKER_PATH = os.path.join(DATA_DIR, f"orderbook_done_{TODAY}.marker")
+DEBUG_LOG_PATH = os.path.join(DATA_DIR, "warrant_orderbook_debug.log")
 
-DEPTH_CSV_PATH = os.path.join(SCRIPT_DIR, f"warrant_depth_{TODAY}.csv")
-TRADES_CSV_PATH = os.path.join(SCRIPT_DIR, f"warrant_trades_{TODAY}.csv")
+DEPTH_CSV_PATH = os.path.join(DATA_DIR, f"warrant_depth_{TODAY}.csv")
+TRADES_CSV_PATH = os.path.join(DATA_DIR, f"warrant_trades_{TODAY}.csv")
 
 WARMUP_POLL_DELAY_S = 0.035   # same rate as HYBRID/POLLING: ~29 req/s
 # 3x a measured single full-sweep time (~50-53s over ~1100 codes) so the

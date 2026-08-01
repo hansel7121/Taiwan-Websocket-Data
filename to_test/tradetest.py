@@ -1,6 +1,8 @@
 import time
 import sys
+import os
 sys.path.append(r"C:\Users\user\OneDrive\Desktop\websocket\Taiwan-Websocket-Data\TradeComExamplePy")  # adjust to where tradecomPy.py is
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root, for kgi_config
 import tradecomPy
 import threading
 from System import UInt16

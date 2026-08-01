@@ -17,6 +17,8 @@ clr.AddReference("PushClient")
 clr.AddReference("QuoteCom")
 from Intelligence import QuoteCom, COM_STATUS, DT
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root, for kgi_config
 from kgi_config import TOKEN, SID, USER_ID, PASSWORD
 
 # ── Data storage ─────────────────────────────────────────────────
