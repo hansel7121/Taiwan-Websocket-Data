@@ -37,7 +37,7 @@ from kgi_config import TOKEN, SID, USER_ID, PASSWORD
 # price value — whichever timestamp is earlier detected that price change
 # first. No shared trade-time field is required for this comparison.
 
-TEST_CODE = "066041"   # actively trading in today's HYBRID test run (rate~0.74/s, highest observed)
+TEST_CODE = "065426"   # actively trading in today's HYBRID scan (rate~1.46/s at cold-start, highest observed)
 KGI_POLL_INTERVAL_S = 50
 CMONEY_POLL_INTERVAL_S = 5
 
