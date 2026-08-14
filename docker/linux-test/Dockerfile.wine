@@ -1,0 +1,40 @@
+# Probes whether KGI's QuoteCom .NET DLLs work when run by a REAL .NET
+# Framework CLR (installed via Wine), sidestepping the CoreCLR Thread.Abort
+# gap and the native pythonnet/Mono crash seen on those two paths.
+# Build from the repo root:
+#   docker build --platform linux/amd64 -f docker/linux-test/Dockerfile.wine -t kgi-linux-test-wine .
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN dpkg --add-architecture i386 && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        wget gnupg2 software-properties-common cabextract xvfb winbind ca-certificates unzip && \
+    mkdir -pm755 /etc/apt/keyrings && \
+    wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key && \
+    wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/winehq-jammy.sources && \
+    apt-get update && apt-get install -y --install-recommends winehq-stable && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN wget -q https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks -O /usr/local/bin/winetricks && \
+    chmod +x /usr/local/bin/winetricks
+
+ENV WINEARCH=win32
+ENV WINEPREFIX=/root/.wine
+ENV WINEDEBUG=-all
+ENV DISPLAY=:99
+
+RUN Xvfb :99 -screen 0 1024x768x16 & \
+    sleep 3 && \
+    winetricks -q dotnet48 && \
+    wineserver -w
+
+WORKDIR /app
+COPY QuoteComExamplePy/Package.dll /app/
+COPY QuoteComExamplePy/PushClient.dll /app/
+COPY QuoteComExamplePy/QuoteCom.dll /app/
+COPY QuoteComExamplePy/ICSharpCode.SharpZipLib.dll /app/
+COPY docker/linux-test/probe.exe /app/
+
+CMD ["wine", "probe.exe"]
