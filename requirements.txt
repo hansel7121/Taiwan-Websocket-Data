@@ -1,3 +1,5 @@
 pythonnet
 matplotlib
 python-dotenv
+requests
+cryptography
