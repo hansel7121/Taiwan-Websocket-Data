@@ -1,0 +1,38 @@
+# Same probe as Dockerfile, but using pythonnet's CoreCLR backend instead of
+# Mono — testing whether that avoids the Mono JIT trampoline crashes seen
+# with Connect2Quote(). Build from the repo root:
+#   docker build -f docker/linux-test/Dockerfile.coreclr -t kgi-linux-test:coreclr .
+#   docker run --rm kgi-linux-test:coreclr
+
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates libicu72 unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
+    bash /tmp/dotnet-install.sh --channel 6.0 --runtime dotnet --install-dir /usr/share/dotnet && \
+    rm /tmp/dotnet-install.sh
+
+ENV DOTNET_ROOT=/usr/share/dotnet
+ENV PATH="/usr/share/dotnet:${PATH}"
+ENV PYTHONNET_RUNTIME=coreclr
+
+RUN pip install --no-cache-dir pythonnet
+
+# KGI's SDK logs Chinese status text via the Big5 codepage, which CoreCLR
+# doesn't ship by default — pull the official codepages package and drop the
+# assembly next to the app so RegisterProvider() can find it.
+RUN curl -sSL https://api.nuget.org/v3-flatcontainer/system.text.encoding.codepages/6.0.0/system.text.encoding.codepages.6.0.0.nupkg -o /tmp/codepages.nupkg && \
+    mkdir -p /tmp/codepages && cd /tmp/codepages && unzip -q /tmp/codepages.nupkg && \
+    cp lib/net6.0/System.Text.Encoding.CodePages.dll /usr/local/lib/ && \
+    rm -rf /tmp/codepages /tmp/codepages.nupkg
+
+WORKDIR /app
+COPY QuoteComExamplePy/*.dll /app/
+COPY TradeComExamplePy/TradeCom.dll /app/
+RUN cp /usr/local/lib/System.Text.Encoding.CodePages.dll /app/
+COPY docker/linux-test/probe.py /app/
+COPY docker/linux-test/live_probe.py /app/
+
+CMD ["python3", "probe.py"]
